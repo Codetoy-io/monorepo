@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>lua.codetoy.dev</title>
+    <script type="module" src="/src/main.js"></script>
+    <style>
+      html, body, canvas, * {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background-color: black;
+        /* background-color: #f8f8f8; */
+      }
+
+      canvas {
+        border-radius: 8px;
+      }
+
+      canvas:focus {
+        outline: 2px solid #4A9EFF;
+        outline-offset: 4px;
+        border-radius: 8px; /* 0.5rem = 8px */;
+      }
+      
+      canvas:focus-visible {
+        outline: 2px solid #4A9EFF;
+        outline-offset: 4px;
+        border-radius: 8px; /* 0.5rem = 8px */;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        body {
+          background-color: #242933;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <canvas focus tabindex="0" style="width: 100%; height: 100%;" id="canvas"></canvas>
+  </body>
+</html>

@@ -1,0 +1,1079 @@
+// ============================================================
+//  Infinite Top-Down .io Shooter  —  AssemblyScript / Codetoy
+// ============================================================
+
+import {
+  fill, stroke, rect, circle, line,
+  font, text, measureText,
+  push, pop, translate, resetTransform,
+  lineWidth, beginPath, moveTo, lineTo,
+  closePath, fillPath, strokePath
+} from "codetoy/canvas"
+import * as screen from "codetoy/screen"
+import * as input from "codetoy/input"
+import { deltaTime, elapsedTime } from "codetoy/time"
+
+// ─────────────────────────── Constants ───────────────────────────
+
+const WALL_T: f64 = 16.0
+const BULLET_SPEED: f64 = 480.0
+const BULLET_TTL: f64 = 2.2
+const BULLET_R: f64 = 5.0
+const PLAYER_R: f64 = 14.0
+const ENEMY_R: f64 = 13.0
+const PLAYER_SPEED: f64 = 220.0
+const IFRAMES: f64 = 0.8
+const MAX_BULLETS: i32 = 200
+const MAX_PARTICLES: i32 = 120
+const LASER_RANGE: f64 = 1200.0
+const HEALTH_PICKUP_R: f64 = 10.0
+
+// game states
+const GS_MENU: i32 = 0
+const GS_PLAYING: i32 = 1
+const GS_ROOM_CLEAR: i32 = 2
+const GS_GAME_OVER: i32 = 3
+
+// enemy roles
+const ROLE_GRUNT: i32 = 0
+const ROLE_FLANKER: i32 = 1
+const ROLE_SNIPER: i32 = 2
+const ROLE_TANK: i32 = 3
+
+// enemy AI states
+const AI_PATROL: i32 = 1
+const AI_CHASE: i32 = 2
+const AI_EVADE: i32 = 3   // arc-evade after bullet impact (replaces retreat)
+const AI_SEARCH: i32 = 5
+
+// room part types
+const PART_START: i32 = 0
+const PART_CORRIDOR: i32 = 1
+const PART_ARENA: i32 = 2
+const PART_CROSS: i32 = 3
+const PART_WIDE: i32 = 4
+const PART_END: i32 = 5
+
+// ─────────────────────────── Math helpers ────────────────────────
+
+function dist(ax: f64, ay: f64, bx: f64, by: f64): f64 {
+  const dx = ax - bx; const dy = ay - by
+  return Math.sqrt(dx * dx + dy * dy)
+}
+function clamp(v: f64, lo: f64, hi: f64): f64 {
+  return v < lo ? lo : (v > hi ? hi : v)
+}
+function lerp(a: f64, b: f64, t: f64): f64 { return a + (b - a) * t }
+
+function rayVsAABB(rx: f64, ry: f64, rdx: f64, rdy: f64,
+  wx: f64, wy: f64, ww: f64, wh: f64, maxT: f64): f64 {
+  var tmin: f64 = 0.0; var tmax: f64 = maxT
+  if (Math.abs(rdx) < 0.0001) {
+    if (rx < wx || rx > wx + ww) return -1.0
+  } else {
+    var t1 = (wx - rx) / rdx; var t2 = (wx + ww - rx) / rdx
+    if (t1 > t2) { const tmp = t1; t1 = t2; t2 = tmp }
+    tmin = Math.max(tmin, t1); tmax = Math.min(tmax, t2)
+    if (tmin > tmax) return -1.0
+  }
+  if (Math.abs(rdy) < 0.0001) {
+    if (ry < wy || ry > wy + wh) return -1.0
+  } else {
+    var t3 = (wy - ry) / rdy; var t4 = (wy + wh - ry) / rdy
+    if (t3 > t4) { const tmp2 = t3; t3 = t4; t4 = tmp2 }
+    tmin = Math.max(tmin, t3); tmax = Math.min(tmax, t4)
+    if (tmin > tmax) return -1.0
+  }
+  return tmin >= 0.0 ? tmin : -1.0
+}
+
+function castRay(rx: f64, ry: f64, rdx: f64, rdy: f64,
+  walls: Wall[], maxT: f64): f64 {
+  var best = maxT
+  for (let i = 0; i < walls.length; i++) {
+    const w = walls[i]
+    const t = rayVsAABB(rx, ry, rdx, rdy, w.x, w.y, w.w, w.h, best)
+    if (t >= 0.0 && t < best) best = t
+  }
+  return best
+}
+
+// ── Clamp a position to stay inside floor bounds ──
+function clampToFloor(x: f64, y: f64, floorY: f64, floorH: f64,
+  totalW: f64, margin: f64): f64[] {
+  const out = new Array<f64>(2)
+  out[0] = clamp(x, margin, totalW - margin)
+  out[1] = clamp(y, floorY + margin, floorY + floorH - margin)
+  return out
+}
+
+// ─────────────────────────── Particle ────────────────────────────
+
+class Particle {
+  x: f64 = 0; y: f64 = 0; vx: f64 = 0; vy: f64 = 0
+  life: f64 = 0; maxLife: f64 = 0
+  r: f64 = 0; g: f64 = 0; b: f64 = 0; size: f64 = 0; alive: bool = false
+
+  spawn(x: f64, y: f64, vx: f64, vy: f64, life: f64,
+    r: f64, g: f64, b: f64, sz: f64): void {
+    this.x = x; this.y = y; this.vx = vx; this.vy = vy
+    this.life = life; this.maxLife = life
+    this.r = r; this.g = g; this.b = b; this.size = sz; this.alive = true
+  }
+
+  update(dt: f64): void {
+    if (!this.alive) return
+    this.life -= dt
+    if (this.life <= 0.0) { this.alive = false; return }
+    this.x += this.vx * dt; this.y += this.vy * dt
+    this.vx *= 0.92; this.vy *= 0.92
+  }
+
+  draw(camX: f64, camY: f64): void {
+    if (!this.alive) return
+    fill(this.r, this.g, this.b, this.life / this.maxLife)
+    circle(this.x - camX, this.y - camY, this.size * (this.life / this.maxLife))
+  }
+}
+
+// ─────────────────────────── Health Pickup ───────────────────────
+
+class HealthPickup {
+  x: f64 = 0; y: f64 = 0; alive: bool = false; bobT: f64 = 0.0
+
+  spawn(x: f64, y: f64): void { this.x = x; this.y = y; this.alive = true; this.bobT = 0.0 }
+
+  update(dt: f64): void { if (this.alive) this.bobT += dt }
+
+  draw(camX: f64, camY: f64): void {
+    if (!this.alive) return
+    const bob = Math.sin(this.bobT * 3.0) * 3.0
+    fill(60, 220, 100, 0.9)
+    circle(this.x - camX, this.y - camY + bob, HEALTH_PICKUP_R)
+    fill(255, 255, 255, 0.95)
+    font("Arial", 11, "bold")
+    text("+", this.x - 5 - camX, this.y + 4 - camY + bob)
+  }
+}
+
+// ─────────────────────────── Bullet ──────────────────────────────
+
+class Bullet {
+  x: f64 = 0; y: f64 = 0; vx: f64 = 0; vy: f64 = 0
+  ttl: f64 = 0; damage: f64 = 0; fromPlayer: bool = false; alive: bool = false
+
+  fire(x: f64, y: f64, tx: f64, ty: f64, spd: f64, dmg: f64, fp: bool): void {
+    const d = dist(x, y, tx, ty); if (d < 0.001) return
+    this.x = x; this.y = y
+    this.vx = (tx - x) / d * spd; this.vy = (ty - y) / d * spd
+    this.ttl = BULLET_TTL; this.damage = dmg; this.fromPlayer = fp; this.alive = true
+  }
+
+  update(dt: f64): void {
+    if (!this.alive) return
+    this.ttl -= dt; if (this.ttl <= 0.0) { this.alive = false; return }
+    this.x += this.vx * dt; this.y += this.vy * dt
+  }
+
+  draw(camX: f64, camY: f64): void {
+    if (!this.alive) return
+    if (this.fromPlayer) fill(255, 230, 80); else fill(255, 80, 80)
+    circle(this.x - camX, this.y - camY, BULLET_R)
+  }
+}
+
+// ─────────────────────────── Wall ────────────────────────────────
+
+class Wall {
+  x: f64 = 0; y: f64 = 0; w: f64 = 0; h: f64 = 0
+
+  set(x: f64, y: f64, w: f64, h: f64): void { this.x = x; this.y = y; this.w = w; this.h = h }
+
+  overlapsCircle(cx: f64, cy: f64, r: f64): bool {
+    return dist(cx, cy, clamp(cx, this.x, this.x + this.w),
+      clamp(cy, this.y, this.y + this.h)) < r
+  }
+
+  draw(camX: f64, camY: f64): void {
+    fill(60, 60, 80); rect(this.x - camX, this.y - camY, this.w, this.h)
+  }
+}
+
+// ─────────────────────────── Door ────────────────────────────────
+
+class Door {
+  x: f64 = 0; y: f64 = 0; w: f64 = 0; h: f64 = 0; active: bool = false
+
+  set(x: f64, y: f64, w: f64, h: f64): void {
+    this.x = x; this.y = y; this.w = w; this.h = h; this.active = false
+  }
+  containsPoint(px: f64, py: f64): bool {
+    return px > this.x && px < this.x + this.w && py > this.y && py < this.y + this.h
+  }
+  draw(camX: f64, camY: f64): void {
+    fill(this.active ? 80 : 60, this.active ? 255 : 80, this.active ? 160 : 60)
+    rect(this.x - camX, this.y - camY, this.w, this.h, 4)
+    if (this.active) {
+      fill(180, 255, 200); font("Arial", 13, "bold")
+      text("EXIT", this.x + this.w / 2 - 16 - camX, this.y + this.h / 2 + 5 - camY)
+    }
+  }
+}
+
+// ─────────────────────────── Actor ───────────────────────────────
+
+class Actor {
+  x: f64 = 0; y: f64 = 0; vx: f64 = 0; vy: f64 = 0
+  hp: f64 = 0; maxHp: f64 = 0; speed: f64 = 0; radius: f64 = 0
+  alive: bool = false; iframes: f64 = 0.0
+
+  takeDamage(amount: f64): void {
+    if (!this.alive || this.iframes > 0.0) return
+    this.hp -= amount; this.iframes = IFRAMES
+    if (this.hp <= 0.0) { this.hp = 0.0; this.alive = false }
+  }
+
+  resolveWalls(walls: Wall[]): void {
+    for (let i = 0; i < walls.length; i++) {
+      const w = walls[i]
+      if (w.overlapsCircle(this.x, this.y, this.radius)) {
+        const nx = clamp(this.x, w.x, w.x + w.w)
+        const ny = clamp(this.y, w.y, w.y + w.h)
+        const dx = this.x - nx; const dy = this.y - ny
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d < 0.001) { this.x += this.radius; continue }
+        this.x += (dx / d) * (this.radius - d)
+        this.y += (dy / d) * (this.radius - d)
+      }
+    }
+  }
+
+  drawHealthBar(camX: f64, camY: f64): void {
+    const bw: f64 = 30.0; const bh: f64 = 4.0
+    const bx = this.x - bw / 2 - camX; const by = this.y - this.radius - 10.0 - camY
+    fill(60, 20, 20); rect(bx, by, bw, bh, 2)
+    fill(80, 220, 80); rect(bx, by, bw * (this.hp / this.maxHp), bh, 2)
+  }
+}
+
+// ─────────────────────────── Player ──────────────────────────────
+
+class Player extends Actor {
+  score: i32 = 0; fireTimer: f64 = 0.0; fireRate: f64 = 0.18
+
+  init(x: f64, y: f64): void {
+    this.x = x; this.y = y; this.hp = 100.0; this.maxHp = 100.0
+    this.speed = PLAYER_SPEED; this.radius = PLAYER_R
+    this.alive = true; this.iframes = 0.0; this.fireTimer = 0.0
+  }
+
+  update(dt: f64, walls: Wall[]): void {
+    if (!this.alive) return
+    if (this.iframes > 0.0) this.iframes -= dt
+    var mx: f64 = 0.0; var my: f64 = 0.0
+    if (input.isKeyDown("ArrowLeft") || input.isKeyDown("a")) mx -= 1.0
+    if (input.isKeyDown("ArrowRight") || input.isKeyDown("d")) mx += 1.0
+    if (input.isKeyDown("ArrowUp") || input.isKeyDown("w")) my -= 1.0
+    if (input.isKeyDown("ArrowDown") || input.isKeyDown("s")) my += 1.0
+    const ml = Math.sqrt(mx * mx + my * my)
+    if (ml > 0.001) { mx /= ml; my /= ml }
+    this.x += mx * this.speed * dt; this.y += my * this.speed * dt
+    this.resolveWalls(walls)
+    if (this.fireTimer > 0.0) this.fireTimer -= dt
+  }
+
+  canShoot(): bool { return this.fireTimer <= 0.0 }
+
+  shoot(bullets: Bullet[], tx: f64, ty: f64): void {
+    for (let i = 0; i < bullets.length; i++) {
+      if (!bullets[i].alive) {
+        bullets[i].fire(this.x, this.y, tx, ty, BULLET_SPEED, 25.0, true)
+        this.fireTimer = this.fireRate; return
+      }
+    }
+  }
+
+  drawLaser(camX: f64, camY: f64, walls: Wall[]): void {
+    if (!this.alive) return
+    const wx = input.mouseX() + camX; const wy = input.mouseY() + camY
+    const dx = wx - this.x; const dy = wy - this.y
+    const d = Math.sqrt(dx * dx + dy * dy); if (d < 0.001) return
+    const rdx = dx / d; const rdy = dy / d
+    const hitT = castRay(this.x, this.y, rdx, rdy, walls, LASER_RANGE)
+    const hx = this.x + rdx * hitT - camX; const hy = this.y + rdy * hitT - camY
+    const ox = this.x - camX; const oy = this.y - camY
+    stroke(0, 220, 255, 0.15); lineWidth(6)
+    beginPath(); moveTo(ox, oy); lineTo(hx, hy); strokePath()
+    stroke(0, 220, 255, 0.7); lineWidth(1.5)
+    beginPath(); moveTo(ox, oy); lineTo(hx, hy); strokePath()
+    fill(0, 240, 255, 0.9); circle(hx, hy, 3.5)
+  }
+
+  draw(camX: f64, camY: f64): void {
+    if (!this.alive) return
+    const blink = this.iframes > 0.0 && (Math.floor(this.iframes * 10.0) % 2 == 0)
+    if (!blink) {
+      fill(80, 180, 255)
+      circle(this.x - camX, this.y - camY, this.radius)
+      const angle = Math.atan2(input.mouseY() + camY - this.y, input.mouseX() + camX - this.x)
+      fill(255, 255, 255)
+      circle(this.x - camX + Math.cos(angle) * 10.0, this.y - camY + Math.sin(angle) * 10.0, 4.0)
+    }
+    this.drawHealthBar(camX, camY)
+  }
+}
+
+// ─────────────────────────── Enemy ───────────────────────────────
+
+class Enemy extends Actor {
+  role: i32 = ROLE_GRUNT
+  aiState: i32 = AI_PATROL
+  fireTimer: f64 = 0.0; fireRate: f64 = 1.2
+  lastKnownX: f64 = 0.0; lastKnownY: f64 = 0.0
+  searchTimer: f64 = 0.0
+  points: i32 = 100
+  orbitDir: f64 = 1.0
+  svx: f64 = 0.0; svy: f64 = 0.0
+  facingAngle: f64 = 0.0
+  alertFlash: f64 = 0.0
+  fovAngle: f64 = 0.0; fovRange: f64 = 0.0
+  patrolX: f64 = 0.0; patrolY: f64 = 0.0
+  patrolTimer: f64 = 0.0; pauseTimer: f64 = 0.0
+  heardSoundX: f64 = 0.0; heardSoundY: f64 = 0.0; heardTimer: f64 = 0.0
+  // evade arc state
+  evadeTimer: f64 = 0.0
+  evadeAwayX: f64 = 0.0; evadeAwayY: f64 = 0.0   // direction away from shooter
+  evadeArcDir: f64 = 1.0                           // +1 or -1 arc curve
+  evadePhase: f64 = 0.0                            // 0=flee, 1=arc-in
+  // level bounds (set at spawn so waypoints stay in-bounds)
+  floorY: f64 = 0.0; floorH: f64 = 0.0; levelW: f64 = 0.0
+
+  init(x: f64, y: f64, role: i32, level: i32, tier: i32,
+    floorY: f64, floorH: f64, levelW: f64): void {
+    this.x = x; this.y = y; this.role = role
+    this.alive = true; this.iframes = 0.0
+    this.orbitDir = Math.random() > 0.5 ? 1.0 : -1.0
+    this.svx = 0.0; this.svy = 0.0
+    this.floorY = floorY; this.floorH = floorH; this.levelW = levelW
+    this.patrolX = x; this.patrolY = y
+    this.patrolTimer = 0.0; this.pauseTimer = 0.0
+    this.aiState = AI_PATROL; this.alertFlash = 0.0; this.evadeTimer = 0.0
+
+    // initialise facing angle AWAY from nearest wall to avoid spawn wall-stare
+    // default: face toward level centre
+    this.facingAngle = Math.atan2(floorY + floorH / 2.0 - y, levelW / 2.0 - x)
+
+    const lm = 1.0 + level as f64 * 0.15
+    if (role == ROLE_GRUNT) {
+      this.maxHp = 60.0 * lm; this.speed = 55.0 + tier as f64 * 6.0
+      this.fireRate = 1.2 - tier as f64 * 0.08; this.points = 100
+      this.fovAngle = 55.0 * Math.PI / 180.0; this.fovRange = 280.0
+    } else if (role == ROLE_FLANKER) {
+      this.maxHp = 50.0 * lm; this.speed = 72.0 + tier as f64 * 8.0
+      this.fireRate = 1.5 - tier as f64 * 0.1; this.points = 150
+      this.fovAngle = 70.0 * Math.PI / 180.0; this.fovRange = 260.0
+    } else if (role == ROLE_SNIPER) {
+      this.maxHp = 40.0 * lm; this.speed = 35.0 + tier as f64 * 4.0
+      this.fireRate = 2.0 - tier as f64 * 0.12; this.points = 200
+      this.fovAngle = 35.0 * Math.PI / 180.0; this.fovRange = 500.0
+    } else {
+      this.maxHp = 160.0 * lm; this.speed = 38.0 + tier as f64 * 5.0
+      this.fireRate = 1.8 - tier as f64 * 0.1; this.points = 300
+      this.fovAngle = 45.0 * Math.PI / 180.0; this.fovRange = 220.0
+    }
+    this.hp = this.maxHp
+    this.radius = role == ROLE_TANK ? 18.0 : ENEMY_R
+    this.fireRate = Math.max(0.35, this.fireRate)
+  }
+
+  // ── Safe waypoint: clamped to floor, not inside any wall ──
+  _safeWaypoint(walls: Wall[], radius: f64): f64[] {
+    const margin = radius + 4.0
+    for (let attempt = 0; attempt < 10; attempt++) {
+      var cx = this.x + (Math.random() - 0.5) * 160.0
+      var cy = this.y + (Math.random() - 0.5) * 160.0
+      // clamp to floor bounds first
+      cx = clamp(cx, margin, this.levelW - margin)
+      cy = clamp(cy, this.floorY + margin, this.floorY + this.floorH - margin)
+      var bad = false
+      for (let wi = 0; wi < walls.length; wi++) {
+        if (walls[wi].overlapsCircle(cx, cy, radius * 1.8)) { bad = true; break }
+      }
+      if (!bad) {
+        const out = new Array<f64>(2); out[0] = cx; out[1] = cy; return out
+      }
+    }
+    // fallback: return current position (enemy stays put this tick)
+    const out = new Array<f64>(2); out[0] = this.x; out[1] = this.y; return out
+  }
+
+  // ── Wall-stare check: probe N directions, return safe angle ──
+  _safeAngle(angle: f64, walls: Wall[]): f64 {
+    const probeDist = this.radius + 20.0
+    // test up to 8 rotations of 45° until we find a clear direction
+    for (let step = 0; step < 8; step++) {
+      const a = angle + step as f64 * (Math.PI / 4.0)
+      const fpx = this.x + Math.cos(a) * probeDist
+      const fpy = this.y + Math.sin(a) * probeDist
+      // also clamp check: reject if probe exits floor bounds
+      if (fpx < 0.0 || fpx > this.levelW ||
+        fpy < this.floorY || fpy > this.floorY + this.floorH) continue
+      var hit = false
+      for (let wi = 0; wi < walls.length; wi++) {
+        if (walls[wi].overlapsCircle(fpx, fpy, 3.0)) { hit = true; break }
+      }
+      if (!hit) return a
+    }
+    return angle + Math.PI   // last resort: flip 180°
+  }
+
+  // ── hearSound: called with the impact position of a player bullet.
+  //    Enemies investigate/flee the SOUND LOCATION, not the player. ──
+  hearSound(sx: f64, sy: f64, range: f64): void {
+    if (!this.alive) return
+    if (this.aiState == AI_CHASE || this.aiState == AI_EVADE) return
+    if (dist(this.x, this.y, sx, sy) < range) {
+      this.heardSoundX = sx; this.heardSoundY = sy
+      this.heardTimer = 3.5 + Math.random() * 2.0
+      this.facingAngle = this._safeAngle(
+        Math.atan2(sy - this.y, sx - this.x), [])
+      if (this.aiState == AI_PATROL) this.aiState = AI_SEARCH
+    }
+  }
+
+  bulletImpactNearby(impactX: f64, impactY: f64,
+    bDirX: f64, bDirY: f64, range: f64): void {
+    if (!this.alive) return
+    if (this.aiState == AI_EVADE) return   // already evading
+    if (dist(this.x, this.y, impactX, impactY) > range) return
+    // direction away from estimated shooter (opposite of bullet travel)
+    this.evadeAwayX = -bDirX; this.evadeAwayY = -bDirY
+    this.evadeTimer = 1.4 + Math.random() * 0.8
+    this.alertFlash = 0.4
+    // Record impact as the sound target so post-evade search investigates
+    // the impact point — NOT the player's actual position
+    this.heardSoundX = impactX; this.heardSoundY = impactY
+    this.heardTimer = 3.0 + Math.random() * 1.5
+    this.aiState = AI_EVADE
+  }
+
+  canSeePlayer(px: f64, py: f64, walls: Wall[]): bool {
+    const dx = px - this.x; const dy = py - this.y
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d > this.fovRange) return false
+    var diff = Math.atan2(dy, dx) - this.facingAngle
+    while (diff > Math.PI) diff -= Math.PI * 2.0
+    while (diff < -Math.PI) diff += Math.PI * 2.0
+    if (Math.abs(diff) > this.fovAngle) return false
+    return castRay(this.x, this.y, dx / d, dy / d, walls, d - this.radius) >= d - this.radius - 2.0
+  }
+
+  update(dt: f64, px: f64, py: f64, walls: Wall[], tier: i32, enemies: Enemy[]): void {
+    if (!this.alive) return
+    if (this.iframes > 0.0) this.iframes -= dt
+    if (this.fireTimer > 0.0) this.fireTimer -= dt
+    if (this.alertFlash > 0.0) this.alertFlash -= dt
+
+    // update facing from velocity when moving fast enough
+    const spd = Math.sqrt(this.svx * this.svx + this.svy * this.svy)
+    if (spd > 10.0) {
+      const rawAngle = Math.atan2(this.svy, this.svx)
+      // only accept the new angle if it doesn't immediately stare into a wall
+      this.facingAngle = this._safeAngle(rawAngle, walls)
+    }
+
+    const spotted = this.canSeePlayer(px, py, walls)
+
+    // ── state machine ──
+    if (this.aiState == AI_EVADE) {
+      // evade is self-terminating — handled in movement below
+    } else if (spotted) {
+      if (this.aiState != AI_CHASE) this.alertFlash = 0.5
+      this.lastKnownX = px; this.lastKnownY = py
+      this.heardTimer = 0.0
+      this.aiState = AI_CHASE
+    } else if (this.aiState == AI_CHASE) {
+      this.aiState = AI_SEARCH
+      this.searchTimer = 2.0 + Math.random() * 1.5
+    } else if (this.aiState == AI_SEARCH) {
+      this.searchTimer -= dt
+      if (this.heardTimer > 0.0) this.heardTimer -= dt
+      if (this.searchTimer <= 0.0 && this.heardTimer <= 0.0) this.aiState = AI_PATROL
+    }
+
+    // ── movement ──
+    if (this.aiState == AI_EVADE) {
+      this._doEvade(dt, px, py, walls)
+    } else if (this.aiState == AI_PATROL) {
+      this._doPatrol(dt, walls)
+    } else if (this.aiState == AI_SEARCH) {
+      const tx = this.heardTimer > 0.0 ? this.heardSoundX : this.lastKnownX
+      const ty = this.heardTimer > 0.0 ? this.heardSoundY : this.lastKnownY
+      this._moveToward(tx, ty, dt)
+      const sdx = tx - this.x; const sdy = ty - this.y
+      if (Math.sqrt(sdx * sdx + sdy * sdy) > 8.0) {
+        this.facingAngle = this._safeAngle(Math.atan2(sdy, sdx), walls)
+      } else {
+        // arrived at search target — pan slowly rather than freeze
+        this.facingAngle += dt * 0.8
+        this.facingAngle = this._safeAngle(this.facingAngle, walls)
+      }
+    } else if (this.aiState == AI_CHASE) {
+      this._steer(dt, px, py, walls, enemies, tier)
+    }
+
+    this.resolveWalls(walls)
+  }
+
+  // ── Evade: sprint directly away from bullet direction, then SEARCH.
+  //    No arc-toward-player — that phase was rotating facingAngle toward
+  //    px/py mid-flee, reliably triggering canSeePlayer and causing chase. ──
+  _doEvade(dt: f64, px: f64, py: f64, walls: Wall[]): void {
+    this.evadeTimer -= dt
+    if (this.evadeTimer <= 0.0) {
+      this.searchTimer = 2.0 + Math.random() * 1.5
+      this.aiState = AI_SEARCH
+      return
+    }
+    const fl = Math.sqrt(this.evadeAwayX * this.evadeAwayX + this.evadeAwayY * this.evadeAwayY)
+    if (fl > 0.001) {
+      const spd = this.speed * 1.3
+      this.svx = lerp(this.svx, (this.evadeAwayX / fl) * spd, dt * 6.0)
+      this.svy = lerp(this.svy, (this.evadeAwayY / fl) * spd, dt * 6.0)
+    }
+    this.x += this.svx * dt; this.y += this.svy * dt
+    this.resolveWalls(walls)
+  }
+
+  _doPatrol(dt: f64, walls: Wall[]): void {
+    if (this.pauseTimer > 0.0) {
+      this.pauseTimer -= dt
+      this.svx = lerp(this.svx, 0.0, dt * 6.0)
+      this.svy = lerp(this.svy, 0.0, dt * 6.0)
+      this.facingAngle += dt * 0.35
+      this.facingAngle = this._safeAngle(this.facingAngle, walls)
+      this.resolveWalls(walls)
+      return
+    }
+
+    this.patrolTimer -= dt
+    const dx0 = this.patrolX - this.x; const dy0 = this.patrolY - this.y
+    const arrived = Math.sqrt(dx0 * dx0 + dy0 * dy0) < 14.0
+
+    if (this.patrolTimer <= 0.0 || arrived) {
+      this.pauseTimer = 1.2 + Math.random() * 2.2
+      const wp = this._safeWaypoint(walls, this.radius)
+      this.patrolX = wp[0]; this.patrolY = wp[1]
+      this.patrolTimer = 3.0 + Math.random() * 3.0
+    }
+
+    const dx = this.patrolX - this.x; const dy = this.patrolY - this.y
+    const d = Math.sqrt(dx * dx + dy * dy)
+    if (d > 14.0) {
+      const spd = this.speed * 0.20
+      this.svx = lerp(this.svx, (dx / d) * spd, dt * 2.2)
+      this.svy = lerp(this.svy, (dy / d) * spd, dt * 2.2)
+      this.x += this.svx * dt; this.y += this.svy * dt
+      this.facingAngle = this._safeAngle(Math.atan2(dy, dx), walls)
+    }
+    this.resolveWalls(walls)
+  }
+
+  _moveToward(tx: f64, ty: f64, dt: f64): void {
+    const d = dist(this.x, this.y, tx, ty); if (d < 1.0) return
+    const spd = this.speed * 0.65
+    this.svx = lerp(this.svx, (tx - this.x) / d * spd, dt * 5.0)
+    this.svy = lerp(this.svy, (ty - this.y) / d * spd, dt * 5.0)
+    this.x += this.svx * dt; this.y += this.svy * dt
+  }
+
+  _steer(dt: f64, px: f64, py: f64,
+    walls: Wall[], enemies: Enemy[], tier: i32): void {
+    var innerR: f64 = 80.0; var outerR: f64 = 150.0
+    var wRadial: f64 = 1.0; var wStrafe: f64 = 0.6
+    var wAvoid: f64 = 1.2; var wSep: f64 = 0.6
+    if (this.role == ROLE_FLANKER) {
+      innerR = 70.0; outerR = 140.0; wRadial = 0.5; wStrafe = 1.8; wSep = 0.5
+    } else if (this.role == ROLE_SNIPER) {
+      innerR = 180.0; outerR = 320.0; wRadial = 0.8; wStrafe = 0.4; wAvoid = 1.5; wSep = 0.8
+    } else if (this.role == ROLE_TANK) {
+      innerR = 60.0; outerR = 120.0; wRadial = 1.2; wStrafe = 0.3; wAvoid = 1.0; wSep = 0.4
+    }
+    wStrafe += tier as f64 * 0.15
+
+    var fx: f64 = 0.0; var fy: f64 = 0.0
+    const pd = dist(this.x, this.y, px, py)
+    if (pd > 0.1) {
+      const radX = (px - this.x) / pd; const radY = (py - this.y) / pd
+      if (pd > outerR) {
+        fx += radX * wRadial * clamp((pd - outerR) / outerR, 0.0, 1.5)
+        fy += radY * wRadial * clamp((pd - outerR) / outerR, 0.0, 1.5)
+      } else if (pd < innerR) {
+        const str = wRadial * 2.5 * clamp(1.0 - pd / innerR, 0.0, 1.0)
+        fx -= radX * str; fy -= radY * str
+      }
+      const tangX = -radY * this.orbitDir; const tangY = radX * this.orbitDir
+      var sb: f64 = pd >= innerR && pd <= outerR ? 1.0
+        : pd < innerR ? clamp(pd / innerR, 0.0, 1.0)
+          : clamp(1.0 - (pd - outerR) / outerR, 0.0, 1.0)
+      fx += tangX * wStrafe * sb; fy += tangY * wStrafe * sb
+    }
+
+    const la = this.speed * 0.28; const ma = Math.atan2(this.svy, this.svx)
+    const fa: f64[] = [0.0, 0.5, -0.5]
+    for (let fi = 0; fi < 3; fi++) {
+      const a = ma + fa[fi]
+      const fpx2 = this.x + Math.cos(a) * la; const fpy2 = this.y + Math.sin(a) * la
+      for (let wi = 0; wi < walls.length; wi++) {
+        if (walls[wi].overlapsCircle(fpx2, fpy2, this.radius * 1.5)) {
+          const wcx = walls[wi].x + walls[wi].w * 0.5
+          const wcy = walls[wi].y + walls[wi].h * 0.5
+          const awx = this.x - wcx; const awy = this.y - wcy
+          const awd = Math.sqrt(awx * awx + awy * awy)
+          if (awd > 0.1) {
+            const str = wAvoid * (1.0 - clamp(awd / (la * 2.5), 0.0, 1.0))
+            fx += (awx / awd) * str; fy += (awy / awd) * str
+          }
+        }
+      }
+    }
+
+    const sepR: f64 = 52.0
+    for (let i = 0; i < enemies.length; i++) {
+      const o = enemies[i]; if (!o.alive || o === this) continue
+      const sd = dist(this.x, this.y, o.x, o.y)
+      if (sd < sepR && sd > 0.1) {
+        fx += (this.x - o.x) / sd * wSep * (1.0 - sd / sepR)
+        fy += (this.y - o.y) / sd * wSep * (1.0 - sd / sepR)
+      }
+    }
+
+    const fl = Math.sqrt(fx * fx + fy * fy)
+    if (fl > 0.001) {
+      this.svx = lerp(this.svx, (fx / fl) * this.speed, dt * 7.0)
+      this.svy = lerp(this.svy, (fy / fl) * this.speed, dt * 7.0)
+    }
+    this.x += this.svx * dt; this.y += this.svy * dt
+  }
+
+  canShoot(): bool { return this.fireTimer <= 0.0 && this.aiState == AI_CHASE }
+
+  shoot(bullets: Bullet[], tx: f64, ty: f64): void {
+    for (let i = 0; i < bullets.length; i++) {
+      if (!bullets[i].alive) {
+        const spd = this.role == ROLE_SNIPER ? BULLET_SPEED * 1.4 : BULLET_SPEED * 0.85
+        const dmg = this.role == ROLE_SNIPER ? 35.0 : 20.0
+        bullets[i].fire(this.x, this.y, tx, ty, spd, dmg, false)
+        this.fireTimer = this.fireRate; return
+      }
+    }
+  }
+
+  drawFOV(camX: f64, camY: f64, walls: Wall[]): void {
+    if (!this.alive) return
+    const ex = this.x - camX; const ey = this.y - camY
+    const isAlert = this.alertFlash > 0.0
+    const cr: f64 = 255.0; const cg: f64 = isAlert ? 140.0 : 60.0; const cb: f64 = isAlert ? 0.0 : 60.0
+    const alpha: f64 = isAlert ? 0.35 : 0.10
+    const leftA = this.facingAngle - this.fovAngle
+    const rightA = this.facingAngle + this.fovAngle
+    const steps: i32 = 16
+    fill(cr, cg, cb, alpha)
+    beginPath(); moveTo(ex, ey)
+    for (let s = 0; s <= steps; s++) {
+      const t = s as f64 / steps as f64
+      const a = leftA + (rightA - leftA) * t
+      const ct = castRay(this.x, this.y, Math.cos(a), Math.sin(a), walls, this.fovRange)
+      if (s == 0) moveTo(ex + Math.cos(a) * ct, ey + Math.sin(a) * ct)
+      else lineTo(ex + Math.cos(a) * ct, ey + Math.sin(a) * ct)
+    }
+    lineTo(ex, ey); fillPath()
+    stroke(cr, cg, cb, isAlert ? 0.7 : 0.3); lineWidth(1.0)
+    const lt = castRay(this.x, this.y, Math.cos(leftA), Math.sin(leftA), walls, this.fovRange)
+    const rt = castRay(this.x, this.y, Math.cos(rightA), Math.sin(rightA), walls, this.fovRange)
+    beginPath(); moveTo(ex, ey); lineTo(ex + Math.cos(leftA) * lt, ey + Math.sin(leftA) * lt); strokePath()
+    beginPath(); moveTo(ex, ey); lineTo(ex + Math.cos(rightA) * rt, ey + Math.sin(rightA) * rt); strokePath()
+    if (this.alertFlash > 0.0) {
+      fill(255, 200, 0); font("Arial", 14, "bold")
+      text("!", ex - 3, ey - this.radius - 12)
+    }
+  }
+
+  draw(camX: f64, camY: f64): void {
+    if (!this.alive) return
+    const blink = this.iframes > 0.0 && (Math.floor(this.iframes * 10.0) % 2 == 0)
+    if (!blink) {
+      if (this.role == ROLE_GRUNT) fill(230, 80, 80)
+      else if (this.role == ROLE_FLANKER) fill(230, 140, 50)
+      else if (this.role == ROLE_SNIPER) fill(180, 80, 220)
+      else fill(200, 60, 60)
+      circle(this.x - camX, this.y - camY, this.radius)
+      fill(255, 255, 255); font("Arial", 9, "bold")
+      const lbl = this.role == ROLE_GRUNT ? "G" : this.role == ROLE_FLANKER ? "F" :
+        this.role == ROLE_SNIPER ? "S" : "T"
+      text(lbl, this.x - 4 - camX, this.y + 4 - camY)
+    }
+    this.drawHealthBar(camX, camY)
+  }
+}
+
+// ─────────────────────────── Room part ───────────────────────────
+
+class RoomPart {
+  worldX: f64 = 0.0; w: f64 = 0.0; h: f64 = 0.0; type: i32 = PART_CORRIDOR
+}
+
+// ─────────────────────────── Level ───────────────────────────────
+
+class Level {
+  walls: Wall[] = []
+  enemies: Enemy[] = []
+  pickups: HealthPickup[] = []
+  door: Door = new Door()
+  parts: RoomPart[] = []
+  totalW: f64 = 0.0; floorY: f64 = 0.0; floorH: f64 = 0.0
+  spawnX: f64 = 0.0; spawnY: f64 = 0.0
+
+  _tier(hs: i32): i32 {
+    if (hs < 500) return 1; if (hs < 1500) return 2
+    if (hs < 3000) return 3; if (hs < 6000) return 4; return 5
+  }
+
+  build(levelNum: i32, highScore: i32): void {
+    this.walls = []; this.enemies = []; this.parts = []; this.pickups = []
+    const tier = this._tier(highScore)
+    const roomH: f64 = 320.0 + Math.min(levelNum as f64 * 10.0, 160.0)
+    this.floorY = 50.0; this.floorH = roomH
+    const pw: f64[] = [400.0, 260.0, 480.0, 380.0, 560.0, 280.0]
+    const numParts = 3 + (levelNum >> 1)
+    let cx: f64 = 0.0
+
+    for (let i = 0; i < numParts + 2; i++) {
+      const p = new RoomPart(); p.worldX = cx
+      if (i == 0) {
+        p.type = PART_START
+        this.spawnX = cx + pw[PART_START] / 2.0
+        this.spawnY = this.floorY + roomH / 2.0
+      } else if (i == numParts + 1) {
+        p.type = PART_END
+      } else { p.type = 1 + (i32)(Math.random() * 4.0) }
+      p.w = pw[p.type]; p.h = roomH; cx += p.w; this.parts.push(p)
+    }
+    this.totalW = cx
+
+    const top = this.floorY; const bot = top + roomH; const wt = WALL_T
+    this._addWall(0.0, top - wt, this.totalW, wt)
+    this._addWall(0.0, bot, this.totalW, wt)
+    this._addWall(-wt, top - wt, wt, roomH + wt * 2.0)
+
+    for (let i = 0; i < this.parts.length; i++) {
+      const p = this.parts[i]; const px = p.worldX; const pw2 = p.w
+      if (p.type == PART_CORRIDOR) {
+        this._addWall(px + pw2 * 0.4, top, pw2 * 0.2, roomH * 0.3)
+        this._addWall(px + pw2 * 0.4, bot - roomH * 0.3, pw2 * 0.2, roomH * 0.3)
+      } else if (p.type == PART_ARENA) {
+        this._addWall(px + pw2 * 0.35, top + roomH * 0.35, pw2 * 0.3, roomH * 0.3)
+      } else if (p.type == PART_CROSS) {
+        this._addWall(px + pw2 * 0.2, top + roomH * 0.1, pw2 * 0.15, roomH * 0.35)
+        this._addWall(px + pw2 * 0.65, top + roomH * 0.55, pw2 * 0.15, roomH * 0.35)
+      } else if (p.type == PART_WIDE) {
+        this._addWall(px + pw2 * 0.15, top + roomH * 0.2, 40.0, 40.0)
+        this._addWall(px + pw2 * 0.5, top + roomH * 0.6, 40.0, 40.0)
+        this._addWall(px + pw2 * 0.75, top + roomH * 0.15, 40.0, 40.0)
+      }
+      if (i == this.parts.length - 1) this._addWall(px + pw2, top - wt, wt, roomH + wt * 2.0)
+
+      if (p.type != PART_START && p.type != PART_END) {
+        const count = 2 + levelNum + (i32)(highScore as f64 / 1000.0)
+        for (let e = 0; e < count; e++) {
+          const ex = px + pw2 * 0.2 + Math.random() * pw2 * 0.6
+          const ey = top + roomH * 0.15 + Math.random() * roomH * 0.7
+          const role = this._pickRole(tier, e)
+          const en = new Enemy()
+          en.init(ex, ey, role, levelNum, tier, this.floorY, this.floorH, this.totalW)
+          this.enemies.push(en)
+        }
+      }
+    }
+
+    const last = this.parts[this.parts.length - 1]
+    this.door.set(last.worldX + last.w * 0.35, this.floorY + roomH * 0.25, last.w * 0.3, roomH * 0.5)
+  }
+
+  _addWall(x: f64, y: f64, w: f64, h: f64): void {
+    const wl = new Wall(); wl.set(x, y, w, h); this.walls.push(wl)
+  }
+
+  _pickRole(tier: i32, idx: i32): i32 {
+    if (tier <= 1) return ROLE_GRUNT
+    if (tier == 2) return idx % 3 == 0 ? ROLE_FLANKER : ROLE_GRUNT
+    if (tier == 3) {
+      if (idx % 4 == 0) return ROLE_FLANKER
+      if (idx % 5 == 0) return ROLE_SNIPER
+      return ROLE_GRUNT
+    }
+    if (idx % 5 == 0) return ROLE_TANK
+    if (idx % 3 == 0) return ROLE_FLANKER
+    if (idx % 4 == 0) return ROLE_SNIPER
+    return ROLE_GRUNT
+  }
+
+  allEnemiesDead(): bool {
+    for (let i = 0; i < this.enemies.length; i++) if (this.enemies[i].alive) return false
+    return true
+  }
+}
+
+// ─────────────────────────── Game globals ────────────────────────
+
+var gameState: i32 = GS_MENU
+var player: Player = new Player()
+var bullets: Bullet[] = []
+var particles: Particle[] = []
+var level: Level = new Level()
+var currentLevel: i32 = 1
+var highScore: i32 = 0
+var transitionTimer: f64 = 0.0
+var camX: f64 = 0.0; var camY: f64 = 0.0
+var shakeTimer: f64 = 0.0; var shakeIntensity: f64 = 0.0
+
+// ─────────────────────────── Helpers ─────────────────────────────
+
+function initBullets(): void {
+  bullets = []; for (let i = 0; i < MAX_BULLETS; i++) bullets.push(new Bullet())
+}
+function initParticles(): void {
+  particles = []; for (let i = 0; i < MAX_PARTICLES; i++) particles.push(new Particle())
+}
+function spawnParticles(x: f64, y: f64, n: i32, r: f64, g: f64, b: f64): void {
+  var s = 0
+  for (let i = 0; i < particles.length && s < n; i++) {
+    if (!particles[i].alive) {
+      const a = Math.random() * Math.PI * 2.0; const sp = 60.0 + Math.random() * 120.0
+      particles[i].spawn(x, y, Math.cos(a) * sp, Math.sin(a) * sp,
+        0.4 + Math.random() * 0.4, r, g, b, 3.0 + Math.random() * 3.0); s++
+    }
+  }
+}
+function screenShake(intensity: f64, dur: f64): void { shakeIntensity = intensity; shakeTimer = dur }
+
+function startGame(): void {
+  currentLevel = 1; player = new Player(); initBullets(); initParticles()
+  level = new Level(); level.build(currentLevel, highScore)
+  player.init(level.spawnX, level.spawnY); player.score = 0
+  camX = 0.0; camY = 0.0; gameState = GS_PLAYING
+}
+
+function loadNextLevel(): void {
+  currentLevel++; initBullets(); initParticles()
+  level = new Level(); level.build(currentLevel, highScore)
+  player.init(level.spawnX, level.spawnY)
+  player.hp = Math.min(player.maxHp, player.hp + player.maxHp * 0.3)
+  camX = 0.0; camY = 0.0; gameState = GS_PLAYING
+}
+
+// ─────────────────────────── HUD ─────────────────────────────────
+
+function drawHUD(): void {
+  const sw = screen.width(); const sh = screen.height()
+  fill(30, 10, 10, 0.7); rect(10, sh - 30, 160, 16, 4)
+  fill(80, 220, 80); rect(10, sh - 30, 160.0 * (player.hp / player.maxHp), 16, 4)
+  fill(220, 220, 220); font("Arial", 12); text("HP", 14, sh - 16)
+  fill(255, 230, 80); font("Arial", 18, "bold")
+  text("Score: " + player.score.toString(), 10, 30)
+  fill(200, 200, 200); font("Arial", 13); text("Best: " + highScore.toString(), 10, 50)
+  fill(180, 220, 255); font("Arial", 15, "bold")
+  const ls = "Level " + currentLevel.toString()
+  text(ls, sw / 2.0 - measureText(ls) / 2.0, 28)
+  let alive = 0
+  for (let i = 0; i < level.enemies.length; i++) if (level.enemies[i].alive) alive++
+  fill(255, 140, 80); font("Arial", 13)
+  text("Enemies: " + alive.toString(), sw - 100, 28)
+  if (level.door.active) {
+    fill(80, 255, 160); font("Arial", 14, "bold")
+    const hint = "Reach the EXIT!"
+    text(hint, sw / 2.0 - measureText(hint) / 2.0, 52)
+  }
+}
+
+// ─────────────────────────── Draw world ──────────────────────────
+
+function _drawWorld(rcx: f64, rcy: f64): void {
+  const sw = screen.width(); const sh = screen.height()
+  fill(28, 28, 40); rect(0, 0, sw, sh)
+  for (let i = 0; i < level.parts.length; i++) {
+    const p = level.parts[i]
+    fill(i % 2 == 0 ? 36 : 32, i % 2 == 0 ? 36 : 32, i % 2 == 0 ? 52 : 48)
+    rect(p.worldX - rcx, level.floorY - rcy, p.w, p.h)
+  }
+  for (let i = 0; i < level.walls.length; i++) level.walls[i].draw(rcx, rcy)
+  level.door.draw(rcx, rcy)
+  for (let i = 0; i < level.pickups.length; i++) level.pickups[i].draw(rcx, rcy)
+  for (let i = 0; i < level.enemies.length; i++)
+    if (level.enemies[i].alive) level.enemies[i].drawFOV(rcx, rcy, level.walls)
+  for (let i = 0; i < level.enemies.length; i++) level.enemies[i].draw(rcx, rcy)
+  player.drawLaser(rcx, rcy, level.walls)
+  for (let i = 0; i < bullets.length; i++)
+    if (bullets[i].alive && bullets[i].fromPlayer) bullets[i].draw(rcx, rcy)
+  for (let i = 0; i < bullets.length; i++)
+    if (bullets[i].alive && !bullets[i].fromPlayer) bullets[i].draw(rcx, rcy)
+  player.draw(rcx, rcy)
+  for (let i = 0; i < particles.length; i++) particles[i].draw(rcx, rcy)
+}
+
+// ─────────────────────────── Main update ─────────────────────────
+
+export function update(): void {
+  const dt = Math.min(deltaTime(), 0.05) as f64
+  const sw = screen.width(); const sh = screen.height()
+
+  // ── Auto-start: skip menu entirely, begin playing immediately ──
+  if (gameState == GS_MENU) {
+    startGame()
+    return
+  }
+
+  if (gameState == GS_GAME_OVER) {
+    fill(10, 8, 14, 0.95); rect(0, 0, sw, sh)
+    fill(255, 80, 80); font("Arial", 44, "bold")
+    const go = "GAME OVER"; text(go, sw / 2.0 - measureText(go) / 2.0, sh / 2.0 - 60.0)
+    fill(255, 230, 80); font("Arial", 22, "bold")
+    const sc = "Score: " + player.score.toString()
+    text(sc, sw / 2.0 - measureText(sc) / 2.0, sh / 2.0)
+    fill(200, 200, 200); font("Arial", 16)
+    const hs2 = "High Score: " + highScore.toString()
+    text(hs2, sw / 2.0 - measureText(hs2) / 2.0, sh / 2.0 + 34.0)
+    fill(160, 200, 255); font("Arial", 15)
+    const restart = "Press any key to restart"
+    text(restart, sw / 2.0 - measureText(restart) / 2.0, sh / 2.0 + 72.0)
+    return
+  }
+
+  if (gameState == GS_ROOM_CLEAR) {
+    transitionTimer -= dt; _drawWorld(camX, camY)
+    fill(20, 40, 20, 0.7); rect(0, 0, sw, sh)
+    fill(80, 255, 160); font("Arial", 36, "bold")
+    const rc = "ROOM CLEAR!"; text(rc, sw / 2.0 - measureText(rc) / 2.0, sh / 2.0 - 30.0)
+    fill(255, 230, 80); font("Arial", 18)
+    const ns = "Proceeding to next level..."
+    text(ns, sw / 2.0 - measureText(ns) / 2.0, sh / 2.0 + 20.0)
+    if (transitionTimer <= 0.0) loadNextLevel()
+    return
+  }
+
+  // ── PLAYING ──
+
+  camX = lerp(camX, player.x - sw / 2.0, Math.min(dt * 8.0, 1.0))
+  camY = lerp(camY, player.y - sh / 2.0, Math.min(dt * 8.0, 1.0))
+  camX = clamp(camX, -sw * 0.1, level.totalW - sw * 0.9)
+  camY = clamp(camY, level.floorY - sh * 0.5, level.floorY + level.floorH - sh * 0.5)
+  var sox: f64 = 0.0; var soy: f64 = 0.0
+  if (shakeTimer > 0.0) {
+    shakeTimer -= dt; sox = (Math.random() - 0.5) * shakeIntensity
+    soy = (Math.random() - 0.5) * shakeIntensity
+  }
+  const rcx = camX + sox; const rcy = camY + soy
+
+  player.update(dt, level.walls)
+
+  if ((input.isMouseDown(0) || input.isKeyDown(" ")) && player.canShoot() && player.alive) {
+    const wmx = input.mouseX() + rcx; const wmy = input.mouseY() + rcy
+    player.shoot(bullets, wmx, wmy)
+    spawnParticles(player.x, player.y, 3, 255, 230, 80)
+    // NOTE: hearSound is NOT called here — enemies only react to bullet
+    // impact positions, not the muzzle/player position.
+  }
+
+  const tier = level._tier(highScore)
+  for (let i = 0; i < level.enemies.length; i++) {
+    const en = level.enemies[i]; if (!en.alive) continue
+    en.update(dt, player.x, player.y, level.walls, tier, level.enemies)
+    if (en.canShoot() && dist(en.x, en.y, player.x, player.y) < en.fovRange)
+      en.shoot(bullets, player.x, player.y)
+  }
+
+  // pickups update + player collection
+  for (let i = 0; i < level.pickups.length; i++) {
+    const pk = level.pickups[i]; if (!pk.alive) continue
+    pk.update(dt)
+    if (dist(pk.x, pk.y, player.x, player.y) < HEALTH_PICKUP_R + PLAYER_R) {
+      player.hp = Math.min(player.maxHp, player.hp + 25.0)
+      pk.alive = false
+      spawnParticles(pk.x, pk.y, 8, 80, 220, 100)
+    }
+  }
+
+  // bullets
+  for (let i = 0; i < bullets.length; i++) {
+    const b = bullets[i]; if (!b.alive) continue
+    b.update(dt); if (!b.alive) continue
+    for (let w = 0; w < level.walls.length; w++) {
+      if (level.walls[w].overlapsCircle(b.x, b.y, BULLET_R)) {
+        spawnParticles(b.x, b.y, 4, 200, 200, 160)
+        if (b.fromPlayer) {
+          const bspd = Math.sqrt(b.vx * b.vx + b.vy * b.vy)
+          const bdx = bspd > 0.1 ? b.vx / bspd : 0.0
+          const bdy = bspd > 0.1 ? b.vy / bspd : 0.0
+          // ── Bullet hit a wall: broadcast impact sound to nearby enemies.
+          //    Enemies will investigate the impact point, not the player. ──
+          for (let ei = 0; ei < level.enemies.length; ei++) {
+            level.enemies[ei].hearSound(b.x, b.y, 320.0)
+            level.enemies[ei].bulletImpactNearby(b.x, b.y, bdx, bdy, 200.0)
+          }
+        }
+        b.alive = false; break
+      }
+    }
+    if (!b.alive) continue
+    if (b.fromPlayer) {
+      for (let e = 0; e < level.enemies.length; e++) {
+        const en = level.enemies[e]; if (!en.alive) continue
+        if (dist(b.x, b.y, en.x, en.y) < BULLET_R + en.radius) {
+          const wasAlive = en.alive
+          en.takeDamage(b.damage); b.alive = false
+          spawnParticles(b.x, b.y, 6, 255, 80, 80)
+          if (!en.alive && wasAlive) {
+            spawnParticles(en.x, en.y, 12, 230, 60, 60)
+            player.score += en.points
+            if (player.score > highScore) highScore = player.score
+            // 35% chance to drop a health pickup
+            if (Math.random() < 0.35) {
+              const pk = new HealthPickup()
+              pk.spawn(en.x, en.y)
+              level.pickups.push(pk)
+            }
+          }
+          break
+        }
+      }
+    } else {
+      if (player.alive && dist(b.x, b.y, player.x, player.y) < BULLET_R + PLAYER_R) {
+        player.takeDamage(b.damage); b.alive = false
+        spawnParticles(b.x, b.y, 8, 80, 160, 255); screenShake(6.0, 0.2)
+        if (!player.alive) {
+          spawnParticles(player.x, player.y, 20, 80, 160, 255)
+          if (player.score > highScore) highScore = player.score
+          gameState = GS_GAME_OVER
+        }
+      }
+    }
+  }
+
+  for (let i = 0; i < particles.length; i++) particles[i].update(dt)
+  if (level.allEnemiesDead()) level.door.active = true
+  if (level.door.active && player.alive && level.door.containsPoint(player.x, player.y)) {
+    player.score += 500
+    if (player.score > highScore) highScore = player.score
+    gameState = GS_ROOM_CLEAR; transitionTimer = 2.5
+  }
+
+  _drawWorld(rcx, rcy)
+  drawHUD()
+}
+
+export function onKeyDown(key: string): void {
+  if (gameState == GS_GAME_OVER) startGame()
+}
+export function onMouseDown(button: i32): void {
+  if (gameState == GS_GAME_OVER) startGame()
+}

@@ -1,0 +1,4 @@
+- [x] scale canvas to actual screen pixels for always crisp rasterization
+- [x] full documentation needed for most games
+- [x] core drawing methods (rect, circle, ellipse, fill)
+- [x] iframe isolation for playground runtime

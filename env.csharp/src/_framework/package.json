@@ -1,0 +1,43 @@
+{
+  "name": "@wasmsharp/core",
+  "version": "0.10.2",
+  "exports": "./index.js",
+  "types": "./index.d.ts",
+  "scripts": {
+    "watch": "tsc --watch",
+    "build": "dotnet publish -c Release",
+    "postbuild": "rm -rf ../env.csharp/src/_framework && rm -rf ./__tests__ && cp -r ./dist/net10.0/publish/wwwroot/_framework ../env.csharp/src/_framework",
+    "pack:core": "cd ./dist/net10.0/publish/wwwroot/_framework && pnpm pack --pack-destination ../../../../../bin",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JakeYallop/WasmSharp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/JakeYallop/WasmSharp/issues"
+  },
+  "homepage": "https://github.com/JakeYallop/WasmSharp",
+  "author": "JakeYallop",
+  "keywords": [
+    "wasm",
+    "webassembly",
+    "wasmsharp",
+    "csharp",
+    "dotnet",
+    "javascript",
+    "compilers",
+    "roslyn",
+    "analyzers"
+  ],
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.3",
+    "@vitest/coverage-v8": "^3.2.3"
+  },
+  "dependencies": {
+    "comlink": "^4.4.2"
+  }
+}

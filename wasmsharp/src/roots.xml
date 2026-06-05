@@ -1,0 +1,31 @@
+﻿<linker>
+  <assembly fullname="Microsoft.DiaSymReader" />
+  <assembly fullname="Microsoft.CodeAnalysis.CSharp.Workspaces" />
+  <assembly fullname="Microsoft.CodeAnalysis.CSharp.Features" />
+  <assembly fullname="Microsoft.CodeAnalysis.Workspaces" />
+  <assembly fullname="Microsoft.CodeAnalysis.Features">
+    <type fullname="Microsoft.CodeAnalysis.Completion*" />
+    <type fullname="Microsoft.CodeAnalysis.EmbeddedLanguages.EmbeddedLanguageMetadata" />
+    <type fullname="Microsoft.CodeAnalysis.Shared.DefaultDocumentSupportsFeatureService" />
+  </assembly>
+
+  <!-- Ensure Codetoy API isn't removed by the IL linker/trimmer -->
+  <assembly fullname="WasmSharp.Core">
+    <type fullname="Input" preserve="all" />
+    <type fullname="Canvas" preserve="all" />
+    <type fullname="Screen" preserve="all" />
+    <type fullname="Console" preserve="all" />
+  </assembly>
+
+  <!-- Ensure Math API isn't removed by the IL linker/trimmer -->
+  <assembly fullname="System.Runtime">
+    <type fullname="System.Math" preserve="all" />
+  </assembly>
+
+  <!-- Ensure System.Numerics types (Vector2, Vector3, Matrix4x4, etc.) aren't trimmed.
+       In .NET 10 these types live in System.Private.CoreLib, not System.Numerics.dll. -->
+  <assembly fullname="System.Numerics.Vectors" preserve="all" />
+  <assembly fullname="System.Private.CoreLib">
+    <type fullname="System.Numerics*" preserve="all" />
+  </assembly>
+</linker>

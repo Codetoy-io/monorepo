@@ -1,0 +1,155 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.WebAssembly">
+  <PropertyGroup>
+    <OutputPath>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)/../dist'))</OutputPath>
+    <TargetFramework>$(NetVersion)</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <IsTrimmable>true</IsTrimmable>
+    <PublishTrimmed>true</PublishTrimmed>
+
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+
+    <WasmFingerprintAssets>false</WasmFingerprintAssets>
+    <CompressionEnabled>false</CompressionEnabled>
+    <WasmBundlerFriendlyBootConfig>true</WasmBundlerFriendlyBootConfig>
+
+    <!-- TODO: Investigate using Webcil format for better compatibility - how do we load DLLs when packaged in this format?-->
+    <WasmEnableWebcil>false</WasmEnableWebcil>
+  </PropertyGroup>
+
+  <!-- Space savings when trimming -->
+  <PropertyGroup Condition="$(Configuration) == 'Release'">
+    <TrimmerRemoveSymbols>true</TrimmerRemoveSymbols>
+    <DebuggerSupport>false</DebuggerSupport>
+    <UseNativeHttpHandler>true</UseNativeHttpHandler>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Jab" Version="0.11.0" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Features" Version="4.14.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0-preview.5.25277.114" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="$(Configuration) == 'Debug'">
+    <WasmNativeStrip>false</WasmNativeStrip>
+    <WasmEmitSymbolMap>true</WasmEmitSymbolMap>
+    <!--from https://github.com/dotnet/runtime/blob/4765dd1b9f1aa58f16d6922438bcc6cb01b4a666/docs/workflow/debugging/mono/wasm-debugging.md#collecting-stack-traces-with-symbols-in-blazor -->
+    <WasmBuildNative>true</WasmBuildNative>
+    <WasmDebugLevel>1</WasmDebugLevel>
+    <WasmNativeDebugSymbols>true</WasmNativeDebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <PackageJsonFile>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)/../package.json'))</PackageJsonFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(PublishTrimmed)' == 'True'">
+    <!-- ILLink -->
+    <TrimmerRootDescriptor Include="roots.xml" />
+  </ItemGroup>
+
+  <!--Hide node modules and dist folder-->
+  <ItemGroup>
+    <None Remove="node_modules/**/*" />
+    <None Remove="dist/**/*" />
+  </ItemGroup>
+
+  <Target Name="_WasmBuildTarget" BeforeTargets="AssignTargetPaths" />
+
+  <Target Name="_PreserveDotNetTypesDeclarationFile" AfterTargets="_ResolveWasmOutputs" BeforeTargets="CopyFilesToOutputDirectory">
+    <ItemGroup>
+      <!-- Find the dotnet.d.ts file from the wasm output candidates, and manually copy it -->
+      <!-- TODO: Find a more permanent fix rather than relying on _WasmBuildFilesToRemove -->
+      <_DotNetTypesFile Include="@(_WasmBuildFilesToRemove)" Condition="'%(FileName)%(Extension)' == 'dotnet.d.ts'" />
+    </ItemGroup>
+
+    <Message Importance="high" Text="Found dotnet.d.ts at: @(_DotNetTypesFile)" Condition="'@(_DotNetTypesFile)' != ''" />
+    <Copy SourceFiles="@(_DotNetTypesFile)" DestinationFiles="$(MSBuildThisFileDirectory)/dotnet.d.ts" SkipUnchangedFiles="true" Condition="'@(_DotNetTypesFile)' != ''" />
+
+    <ItemGroup>
+      <FileWrites Include="$(MSBuildThisFileDirectory)/dotnet.d.ts" Condition="'@(_DotNetTypesFile)' != ''" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_AddDotnetTypesToPackageDeps" AfterTargets="_WasmBuildTarget;_PreserveDotNetTypesDeclarationFile" Condition="Exists('$(MSBuildThisFileDirectory)/dotnet.d.ts')">
+    <ItemGroup>
+      <WasmSharpPackageDeps Include="$(MSBuildThisFileDirectory)/dotnet.d.ts" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_EnsureTypeScriptOfRequiredVersionInstalled" AfterTargets="_WasmBuildTarget" Condition="'$(_RanTscDependencyCheck)' != 'True'">
+    <Message Importance="high" Text="Checking dependencies"></Message>
+    <Exec Command="pnpm exec tsc --version" ConsoleToMSBuild="true" IgnoreExitCode="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="TscVersionCheckOutput" />
+    </Exec>
+    <Message Importance="high" Text="tsc check output: $(TscVersionCheckOutput)"></Message>
+    <PropertyGroup>
+      <TypeScriptInstalledForCompile>$(TscVersionCheckOutput.StartsWith('Version 5.'))</TypeScriptInstalledForCompile>
+    </PropertyGroup>
+    <Message Importance="high" Text="Is TSC installed? $(TypeScriptInstalledForCompile)"></Message>
+    <Message Importance="high" Text="TypeScript already installed, skipping install step." Condition="$(TypeScriptInstalledForCompile) == 'True'"></Message>
+    <Message Importance="high" Text="TypeScript not installed. Installing TypeScript uisng pnpm install." Condition="$(TypeScriptInstalledForCompile) != 'True'"></Message>
+    <Exec Command="pnpm install" Condition="$(TypeScriptInstalledForCompile) != 'True'" />
+    <PropertyGroup>
+      <_RanTscDependencyCheck>True</_RanTscDependencyCheck>
+    </PropertyGroup>
+  </Target>
+
+  <!-- TODO: We currently always run this target, even the repeated time during WasmBuildingForNestedPublish -->
+  <!-- Investigate caching the built files somewhere during build then recreating the Content items -->
+  <Target Name="_TypeScriptCompileAferBuild" AfterTargets="_EnsureTypeScriptOfRequiredVersionInstalled" DependsOnTargets="_EnsureTypeScriptOfRequiredVersionInstalled">
+    <Message Importance="high" Text="Compiling TypeScript code to $(OutputPath)/typescript"></Message>
+
+    <Exec Command="pnpm exec tsc -p ./tsconfig.json --outDir $(OutputPath)/typescript"></Exec>
+
+    <ItemGroup>
+      <WasmSharpPackageDeps Include="$(OutputPath)/typescript/**/*.js" />
+      <WasmSharpPackageDeps Include="$(OutputPath)/typescript/**/*.d.ts" />
+      <WasmSharpPackageDeps Include="$(OutputPath)/typescript/**/*.map" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_CreateModifiedPackageJson" BeforeTargets="_AddPackageJsonToPackageDeps">
+    <PropertyGroup>
+      <OriginalPackageJsonPath>$([MSBuild]::NormalizePath('$(MSBuildThisFileDirectory)/../package.json'))</OriginalPackageJsonPath>
+      <ModifiedPackageJsonPath>$(OutputPath)package.json</ModifiedPackageJsonPath>
+      <PathToStrip>./dist/$(TargetFramework)/publish/wwwroot/_framework/</PathToStrip>
+    </PropertyGroup>
+
+    <Copy SourceFiles="$(OriginalPackageJsonPath)" DestinationFiles="$(ModifiedPackageJsonPath)" />
+
+    <!-- Read entire file as single string and replace -->
+    <PropertyGroup>
+      <PackageJsonContent>$([System.IO.File]::ReadAllText('$(ModifiedPackageJsonPath)'))</PackageJsonContent>
+      <ModifiedContent>$(PackageJsonContent.Replace('$(PathToStrip)', './'))</ModifiedContent>
+    </PropertyGroup>
+
+    <!-- Write back the modified content -->
+    <WriteLinesToFile File="$(ModifiedPackageJsonPath)" Lines="$(ModifiedContent)" Overwrite="true" />
+
+    <ItemGroup>
+      <FileWrites Include="$(ModifiedPackageJsonPath)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_AddPackageJsonToPackageDeps" AfterTargets="_WasmBuildTarget">
+    <ItemGroup>
+      <WasmSharpPackageDeps Include="$(OutputPath)package.json" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_CopyWasmSharpPackageDeps" AfterTargets="_WasmBuildTarget" DependsOnTargets="_WasmBuildTarget;_TypeScriptCompileAferBuild;_AddDotnetTypesToPackageDeps;_AddPackageJsonToPackageDeps">
+    <ItemGroup>
+      <Content Include="@(WasmSharpPackageDeps)">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+        <Link>wwwroot/_framework/%(RecursiveDir)%(Filename)%(Extension)</Link>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+</Project>
