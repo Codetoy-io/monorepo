@@ -1,0 +1,3 @@
+[submodule "bindings.web"]
+	path = bindings.web
+	url = https://github.com/Codetoy-io/bindings.web.git
