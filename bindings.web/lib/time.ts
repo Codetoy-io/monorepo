@@ -9,7 +9,7 @@
  * times user code calls it in a single frame.
  */
 
-import { cachedDelta, startTime } from "./runtime";
+import { cachedDelta, startTime } from "./runtime.js";
 
 export const deltaTime   = () => cachedDelta;
 export const elapsedTime = () => (performance.now() - startTime) / 1000;

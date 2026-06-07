@@ -1,10 +1,20 @@
 {
-  "name": "bindings.web",
+  "name": "@codetoy-io/bindings.web",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
   "type": "module",
+  "exports": {
+    "./canvas": "./dist/canvas.js",
+    "./input": "./dist/input.js",
+    "./runtime": "./dist/runtime.js",
+    "./screen": "./dist/screen.js",
+    "./time": "./dist/time.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
