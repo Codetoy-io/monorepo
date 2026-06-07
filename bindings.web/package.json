@@ -8,10 +8,15 @@
     "./input": "./dist/input.js",
     "./runtime": "./dist/runtime.js",
     "./screen": "./dist/screen.js",
-    "./time": "./dist/time.js"
+    "./time": "./dist/time.js",
+    "./assemblyscript/canvas.txt": "./assemblyscript/canvas.txt",
+    "./assemblyscript/input.txt": "./assemblyscript/input.txt",
+    "./assemblyscript/screen.txt": "./assemblyscript/screen.txt",
+    "./assemblyscript/time.txt": "./assemblyscript/time.txt"
   },
   "files": [
-    "dist"
+    "dist",
+    "assemblyscript"
   ],
   "scripts": {
     "build": "tsc",

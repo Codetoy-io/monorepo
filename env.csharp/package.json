@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@wasmsharp/core": "workspace:*",
-    "bindings.web": "workspace:*",
+    "@codetoy-io/bindings.web": "workspace:*",
     "comlink": "^4.4.2"
   }
 }

@@ -13,11 +13,11 @@
 // ─── Imports ─────────────────────────────────────────────────────────────────
 
 // Runtime and bindings
-import canvasSrc from "bindings.web/assemblyscript/canvas.txt?raw";
-import timeSrc   from "bindings.web/assemblyscript/time.txt?raw";
-import screenSrc from "bindings.web/assemblyscript/screen.txt?raw";
-import inputSrc  from "bindings.web/assemblyscript/input.txt?raw";
-import { init, setExports, wasmImports, canvas, _resetCtx } from "bindings.web/lib/runtime";
+import canvasSrc from "@codetoy-io/bindings.web/assemblyscript/canvas.txt?raw";
+import timeSrc   from "@codetoy-io/bindings.web/assemblyscript/time.txt?raw";
+import screenSrc from "@codetoy-io/bindings.web/assemblyscript/screen.txt?raw";
+import inputSrc  from "@codetoy-io/bindings.web/assemblyscript/input.txt?raw";
+import { init, setExports, wasmImports, canvas, _resetCtx } from "@codetoy-io/bindings.web/runtime";
 
 // AS compiler
 import asc from "assemblyscript/asc";

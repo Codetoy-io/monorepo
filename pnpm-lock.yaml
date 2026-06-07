@@ -16,12 +16,12 @@ importers:
 
   env.as:
     dependencies:
+      '@codetoy-io/bindings.web':
+        specifier: workspace:*
+        version: link:../bindings.web
       assemblyscript:
         specifier: ^0.28.9
         version: 0.28.9
-      bindings.web:
-        specifier: workspace:*
-        version: link:../bindings.web
     devDependencies:
       typescript:
         specifier: ~5.9.3
@@ -32,12 +32,12 @@ importers:
 
   env.csharp:
     dependencies:
+      '@codetoy-io/bindings.web':
+        specifier: workspace:*
+        version: link:../bindings.web
       '@wasmsharp/core':
         specifier: workspace:*
         version: link:../wasmsharp
-      bindings.web:
-        specifier: workspace:*
-        version: link:../bindings.web
       comlink:
         specifier: ^4.4.2
         version: 4.4.2

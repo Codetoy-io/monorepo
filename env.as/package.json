@@ -14,6 +14,6 @@
   },
   "dependencies": {
     "assemblyscript": "^0.28.9",
-    "bindings.web": "workspace:*"
+    "@codetoy-io/bindings.web": "workspace:*"
   }
 }

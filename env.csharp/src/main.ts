@@ -11,8 +11,8 @@ import {
 
 import { CanvasRecorder, blobToBase64 } from "./minimal-recording-utils";
 
-import { init, setExports, canvas, _resetCtx } from "bindings.web/lib/runtime";
-import * as canvasModule from "bindings.web/lib/canvas";
+import { init, setExports, canvas, _resetCtx } from "@codetoy-io/bindings.web/runtime";
+import * as canvasModule from "@codetoy-io/bindings.web/canvas";
 
 // ─── Boot runtime ─────────────────────────────────────────────────────────────
 
@@ -68,7 +68,7 @@ function bridgeExports(e: AssemblyExports) {
 
 // deltaTime is managed by the runtime loop internally; we need the value here
 // to forward into C# each frame. Import the cached value from the time module.
-import { deltaTime as cachedDelta } from "bindings.web/lib/time";
+import { deltaTime as cachedDelta } from "@codetoy-io/bindings.web/time";
 
 // mousemove isn't part of WasmExports in the runtime (it's positional state,
 // not an event callback), so we wire it manually on the shared canvas.
