@@ -1,9 +1,12 @@
-### WebGL Support
+### @Codetoy-io/Bindings.Web
 Codetoy bindings (bindings.web) provides bindings to the Codetoy API for the C# playground (env.csharp) and the AssemblyScript playground (env.as).
 
+### WebGL Support
 If WebGL ever gets added in the future there is many things to consider depending on the route you take to add it.
 
 (option 1) You can add another canvas that goes below the 2D drawing canvas, with the tradeoff being that when recording the canvas you will not be able to record the WebGL part of the canvas.
+
+Option 1 is the simplest and requires less breaking changes.
 
 (option 2) Alternatively you could implement the 2D drawing API within WebGL and then implement the WebGL API so that it can work alongside the existing 2D drawing API. 
 
@@ -13,5 +16,5 @@ Additionally, there is the question of if a new namespace should be made for the
 
 If they share the canvas namespace then it would make sense for certain commands like "reset" to have a duality that allows them to reset not only the 2D drawing state but also reset the WebGL context.
 
-### Option 1
-Go with option 1 since it is the simplest and requires less breaking changes
+(option 3)
+Use a single WebGL canvas and layer the 2D drawing API on top of it. A separate `codetoy/webgl` namespace exposes a simplified WebGL API. The two can coexist, but calls must not be interleaved. Switching between 2D and WebGL within the same frame requires flushing the 2D drawing state first to avoid corrupting the shared context.
