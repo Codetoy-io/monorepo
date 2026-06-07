@@ -24,6 +24,7 @@ init({
   },
 });
 
+
 // ─── Globals ──────────────────────────────────────────────────────────────────
 
 let isReady = false;
@@ -183,11 +184,6 @@ async function compileAndRun(code: string) {
       window.parent.postMessage({ env: "csharp", type: "running", running: false }, "*");
       return;
     }
-
-    // if (errors.length > 0) {
-    //   postOut("IFRAME: Compilation failed: " + errors.map(e => e.message).join(", "), "err");
-    //   return;
-    // }
 
     const result = await currentCompilation.run();
 
