@@ -218,13 +218,19 @@ async function stop() {
 }
 
 async function sendCompletions(caretOffset: number, requestId: number, code: string) {
-  if (!currentCompilation) {
-    window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions: [] }, "*");
-    return;
+  if (!wasmSharpModule) return;
+  try {
+    if (!currentCompilation) {
+      currentCompilation = await wasmSharpModule.createCompilationAsync(code);
+    } else {
+      await currentCompilation.recompileAsync(code);
+    }
+    const completions = (await currentCompilation.getCompletions(caretOffset)) ?? [];
+    window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions }, "*");
   }
-  await currentCompilation.recompileAsync(code);
-  const completions = (await currentCompilation.getCompletions(caretOffset)) ?? [];
-  window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions }, "*");
+  catch(_) {
+    window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions: [] }, "*");
+  }
 }
 
 async function lintOnly(code: string) {
