@@ -228,7 +228,8 @@ async function sendCompletions(caretOffset: number, requestId: number, code: str
     const completions = (await currentCompilation.getCompletions(caretOffset)) ?? [];
     window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions }, "*");
   }
-  catch(_) {
+  catch(e) {
+    postOut(String(e), "err");
     window.parent.postMessage({ env: "csharp", type: "completions", requestId, completions: [] }, "*");
   }
 }
