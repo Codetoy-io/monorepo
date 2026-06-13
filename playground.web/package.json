@@ -49,6 +49,7 @@
 	],
 	"dependencies": {
 		"@codetoy-io/bindings.web": "workspace:*",
-		"monaco-editor": "^0.55.1"
+		"monaco-editor": "^0.55.1",
+		"svelte-splitpanes": "^8.0.12"
 	}
 }

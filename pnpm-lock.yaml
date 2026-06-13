@@ -92,6 +92,9 @@ importers:
       monaco-editor:
         specifier: ^0.55.1
         version: 0.55.1
+      svelte-splitpanes:
+        specifier: ^8.0.12
+        version: 8.0.12(svelte@5.56.3)
     devDependencies:
       '@sveltejs/adapter-auto':
         specifier: ^7.0.1
@@ -1325,6 +1328,11 @@ packages:
       svelte: ^4.0.0 || ^5.0.0-next.0
       typescript: '>=5.0.0'
 
+  svelte-splitpanes@8.0.12:
+    resolution: {integrity: sha512-HJ07HgbtY0Q/35TEuJquGy47dtgCVavV7ay9r1FhWRx3boyUs3RpeiHlwMKliznCKy2ZotNeT+8GG+mIoNjgRA==}
+    peerDependencies:
+      svelte: ^5.43.0
+
   svelte2tsx@0.7.56:
     resolution: {integrity: sha512-NTvqqL+goYlW8gWNajk81L07+uu7jw5V2m1Az5MZbYm3GEydcHXh+uTrLHM9SuGuaqCtF90vlMXkOVBotfH94g==}
     peerDependencies:
@@ -2534,6 +2542,10 @@ snapshots:
       typescript: 6.0.3
     transitivePeerDependencies:
       - picomatch
+
+  svelte-splitpanes@8.0.12(svelte@5.56.3):
+    dependencies:
+      svelte: 5.56.3
 
   svelte2tsx@0.7.56(svelte@5.56.3)(typescript@6.0.3):
     dependencies:

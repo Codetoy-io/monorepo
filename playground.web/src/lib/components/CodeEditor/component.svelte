@@ -4,8 +4,16 @@
   import { detectSystemTheme, watchSystemThemeChanges } from "$lib/theme";
   import { browser } from "$app/environment";
   import { getCompletionsProvider } from "./completionsProvider";
-  import Env from "$lib/components/Env/component.svelte"
-  
+  import Env from "$lib/components/Env/component.svelte";
+  import type { Entry } from "$lib/files";
+
+  interface CodetoyModel {
+    model: Editor.ITextModel;
+    entry: Entry;
+  }
+  let models: { [key: string]: CodetoyModel } = {};
+  let active: CodetoyModel | undefined;
+
   let {
     monaco = $bindable() as typeof Monaco | undefined,
     editor = $bindable() as Editor.IStandaloneCodeEditor | undefined,
@@ -14,13 +22,17 @@
       | undefined,
     updated,
     saveChanges,
+    saved,
+    edited,
     ...props
   }: {
     class?: string;
     editor?: Editor.IStandaloneCodeEditor;
     monaco?: typeof Monaco;
-    updated?: (code:string) => {},
-    saveChanges?: (code:string) => {},
+    updated?: (code: string) => void;
+    saveChanges?: (code: string) => void;
+    saved?: (model: Editor.ITextModel, entry: Entry) => void;
+    edited?: () => void;
     mounted?: (
       monaco: typeof Monaco,
       editor: Editor.IStandaloneCodeEditor
@@ -78,9 +90,8 @@
       });
 
       editor.addCommand(KeyMod.CtrlCmd | KeyCode.KeyS, () => {
-        if (editor) {
-          saveChanges?.(editor.getValue());
-        }
+        if (active) saveFile(active);
+        else if (editor) saveChanges?.(editor.getValue());
       });
 
       const completionsProvider = getCompletionsProvider(env, getIframe)
@@ -109,7 +120,12 @@
     completionProviderDisposable?.dispose();
     completionProviderDisposable = undefined;
 
-    // Dispose all models so stale declaration/sketch models don't linger
+    // Dispose file models tracked in our registry
+    for (const key of Object.keys(models)) { models[key].model.dispose(); }
+    models = {};
+    active = undefined;
+
+    // Dispose all remaining models so stale declaration/sketch models don't linger
     for (const model of monaco.editor.getModels()) {
       model.dispose();
     }
@@ -161,7 +177,8 @@
     }
 
     // Always re-attach the content change listener
-    editor.onDidChangeModelContent(() => {
+    editor.onDidChangeModelContent((e: Editor.IModelContentChangedEvent) => {
+      if (!e.isFlush) edited?.();
       updated?.(editor!.getValue());
     });
   }
@@ -192,8 +209,63 @@
   });
 
   export function clearAllModels() {
-    monaco?.editor.getModels().forEach((model:any) => model.dispose());
+    for (const key of Object.keys(models)) { models[key].model.dispose(); }
+    models = {};
+    active = undefined;
+    monaco?.editor.getModels().forEach((model: any) => model.dispose());
     editor?.dispose();
+  }
+
+  export async function loadAllModels(rootEntry: Entry): Promise<void> {
+    if (!monaco || !editor) return;
+    for (const key of Object.keys(models)) models[key].model.dispose();
+    models = {};
+    active = undefined;
+    const loads: Promise<void>[] = [];
+    function recurse(entry: Entry) {
+      if (entry.kind === "file") loads.push(loadModel(entry));
+      if (entry.entries) for (const child of Object.values(entry.entries)) recurse(child);
+    }
+    recurse(rootEntry);
+    await Promise.all(loads);
+  }
+
+  export async function select(entry: Entry): Promise<void> {
+    if (!monaco || !editor || entry.kind !== "file") return;
+    if (!models[entry.relativePath]) await loadModel(entry);
+    const cm = models[entry.relativePath];
+    if (!cm) return;
+    active = cm;
+    editor.setModel(cm.model);
+  }
+
+  async function loadModel(entry: Entry): Promise<void> {
+    if (!monaco || !editor || entry.kind !== "file") return;
+    const handle = entry.handle as FileSystemFileHandle;
+    const content = await (await handle.getFile()).text();
+    const name = entry.name;
+    let language = "plaintext";
+    if (name.endsWith(".ts")) language = "typescript";
+    else if (name.endsWith(".cs")) language = "csharp";
+    else if (name.endsWith(".lua")) language = "lua";
+    else if (name.endsWith(".js")) language = "javascript";
+    const uri = new monaco!.Uri().with({ path: entry.relativePath });
+    let model = monaco!.editor.getModel(uri);
+    if (!model) model = monaco!.editor.createModel(content, language, uri);
+    else model.setValue(content);
+    if (language === "typescript") {
+      monaco!.languages.typescript.typescriptDefaults.addExtraLib(
+        content, `file://${entry.relativePath}`
+      );
+    }
+    models[entry.relativePath] = { model, entry };
+  }
+
+  async function saveFile(cm: CodetoyModel): Promise<void> {
+    const { saveTextFile } = await import("$lib/files");
+    const content = cm.model.getValue();
+    await saveTextFile(content, cm.entry.relativePath);
+    saved?.(cm.model, cm.entry);
   }
 </script>
 

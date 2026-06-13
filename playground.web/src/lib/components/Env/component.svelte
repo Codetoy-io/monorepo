@@ -4,20 +4,16 @@
   import { waitUntil } from "$lib/utils";
   import { onMount } from "svelte";
 
-  let { 
-    env, 
-    // ready = $bindable(), 
+  let {
+    env,
     class: className,
     writeLog,
     onDiagnostics,
-    onReady,
   }: {
     class?: string;
     env: "lua" | "csharp" | "as";
-    // ready: boolean;
     writeLog: (output: string, kind: "err" | "wrn" | "log" | any) => void;
     onDiagnostics: (diagnostics: any[]) => void;
-    onReady: () => void;
   } = $props()
 
   let iframe: HTMLIFrameElement | undefined = $state(undefined);
@@ -60,7 +56,6 @@
           writeLog("Environment is ready...", "log");
           resolveReadyRequest?.();
           resolveReadyRequest = undefined;
-          onReady?.();
         }, 100);
       }
       else if (data.type === "output") {
@@ -151,17 +146,17 @@
   let resolveReadyRequest: (() => void) | undefined;
   let resolveReadyInterval: ReturnType<typeof setInterval> | undefined;
 
-export function waitUntilReady(): Promise<void> {
-  return new Promise((resolve) => {
-    resolveReadyRequest = resolve;
-    function tryPing(attemptsLeft: number) {
-      if (!resolveReadyRequest) return;
-      iframe?.contentWindow?.postMessage({ type: "ping" }, "*");
-      if (attemptsLeft > 0) setTimeout(() => tryPing(attemptsLeft - 1), 200);
-    }
-    tryPing(25); // retry up to ~5 seconds
-  });
-}
+  export function waitUntilReady(): Promise<void> {
+    return new Promise((resolve) => {
+      resolveReadyRequest = resolve;
+      function tryPing(attemptsLeft: number) {
+        if (!resolveReadyRequest) return;
+        iframe?.contentWindow?.postMessage({ type: "ping" }, "*");
+        if (attemptsLeft > 0) setTimeout(() => tryPing(attemptsLeft - 1), 200);
+      }
+      tryPing(25); // retry up to ~5 seconds
+    });
+  }
 
   export async function getThumbnail(): Promise<string | undefined> {
     console.log("getThumbnail");

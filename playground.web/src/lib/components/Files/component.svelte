@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { onMount } from "svelte";
     import type { Entry } from "$lib/files";
 
     import { outsideclick } from "$lib/utils";
@@ -72,9 +71,9 @@
     });
 
     // Lifecycle
-    onMount(async () => {
+    export async function initialize() {
         await loadAllEntries();
-    });
+    }
 
     // Core Operations
     async function loadAllEntries() {
